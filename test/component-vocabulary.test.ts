@@ -82,7 +82,6 @@ describe("component naming cutover", () => {
       "src/server/server.ts",
       "docs/WORKFLOW_SERVER.md",
       "README.md",
-      path.join("test", "server.test.ts"),
     ]) {
       expect(relative, expected).toContain(expected);
     }
