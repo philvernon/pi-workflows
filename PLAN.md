@@ -4,7 +4,7 @@
 
 Turn `pi-workflows` from a **durable distributed workflow service** (server + child runners over a
 socket, with claims/leases/epochs/fencing/viewer projections) into a **local Pi extension backed by
-one isolated workflow worker process that owns SQLite directly**.
+one isolated workflow worker process that accesses SQLite directly**.
 
 **No workflow-language behavior changes.** Preserve the semantics of `*.workflow.ts` and the
 Pi-native workflow experience listed below. Server-specific operational behavior — multi-process
@@ -56,7 +56,7 @@ the boundary**: the runner is subordinate to a central server that owns persiste
 ### The inversion
 
 Collapse that into: **one Pi session, one isolated workflow worker, one durable SQLite store, one
-tiny semantic message protocol.** The worker owns SQLite directly — no `store.*` RPC crosses the
+tiny semantic message protocol.** The worker accesses SQLite directly — no `store.*` RPC crosses the
 boundary. The protocol describes **workflow interactions**, not the engine's persistence API.
 
 ```text
@@ -66,7 +66,7 @@ Pi extension (owns the Pi session)
      ▼
 Workflow worker (isolated process)
      ├── WorkflowEngine
-     ├── SqliteWorkflowStore   ← owns SQLite directly
+     ├── SqliteWorkflowStore   ← accesses SQLite directly
      ├── workflow loader (jiti)
      └── effect / checkpoint / settings state
 ```
@@ -95,7 +95,7 @@ small `InteractionStore` seam (see below) and parks. Checkpoints and human decis
 park-and-resume pattern, so the protocol is uniform.
 
 This is what lets us throw away the distributed machinery **without** throwing away durability or
-execution isolation: the worker is a separate process (isolation), owns SQLite (durable resume), and
+execution isolation: the worker is a separate process (isolation), accesses SQLite (durable resume), and
 talks to Pi only through the small interaction protocol.
 
 ### The tiny semantic protocol
@@ -422,7 +422,7 @@ class. `SqliteWorkflowStore` implements both:
 ```text
 WorkflowEngine
     → WorkflowExecutionStore ┐
-                             ├→ SqliteWorkflowStore  (owns SQLite directly)
+                             ├→ SqliteWorkflowStore  (accesses SQLite directly)
 ParkingAgentExecutor         │
     → InteractionStore ──────┘
 ```
@@ -430,7 +430,7 @@ ParkingAgentExecutor         │
 ### 1. `WorkflowExecutionStore` (`src/workflows/store.ts:184-233`)
 
 The engine talks to persistence only through this interface. The worker's `SqliteWorkflowStore`
-implements it and owns SQLite directly. No engine call sites change; no `store.*` RPC crosses the
+implements it and accesses SQLite directly. No engine call sites change; no `store.*` RPC crosses the
 boundary.
 
 ### 2. `InteractionStore` (new small interface — the parking executor's seam)
