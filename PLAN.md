@@ -11,11 +11,12 @@ Pi-native workflow experience listed below. Server-specific operational behavior
 ownership, external decision channels, remote viewing, follow-up queues — is intentionally removed.
 
 **Preserved (must keep working exactly as today):**
+
 - The DSL: node types (`agent`, `compute`, `action`, `shell`, `checkpoint`, `decision`,
   `humanDecision`), edges/routing, composition (`includeWorkflow`, named exits), control loops,
   `maxSteps`, node timeouts, `$result.outcome` routing.
 - Checkpoints (park + resume in the same run), human decisions (in-Pi presentation, `/workflow
-  answer`, `onTimeout` default policy), live settings via JSON Patch, updates/notifications.
+answer`, `onTimeout` default policy), live settings via JSON Patch, updates/notifications.
 - Run control: pause/resume/cancel/restart (restart = new run from original input).
 - The two Pi-experience recovery behaviors: post-workflow model turn, and bounded
   missing-submission reminders for agent steps.
@@ -25,6 +26,7 @@ ownership, external decision channels, remote viewing, follow-up queues — is i
   worker's SQLite, not the server).
 
 **Intentionally removed (server-specific operational behavior):**
+
 - Multi-process ownership machinery: claims, leases, epochs, fencing tokens, runner supervision,
   process handoff/recovery, the `pi-workflows.client.v1` socket protocol.
 - External decision channels (Telegram) and remote viewing (`piw`, Herdr, WebSocket relay).
@@ -80,7 +82,7 @@ The engine's three real seams are preserved and are what make this work:
 - **`AgentStepExecutor`** (`src/workflows/types.ts:900-910`) — agent execution. In the worker this is
   a **parking executor** (see below).
 
-### The key insight: the worker's executor *parks*; the extension *presents*
+### The key insight: the worker's executor _parks_; the extension _presents_
 
 An agent step does NOT reach Pi from the worker. The current `InteractiveExecutor`
 (`src/server/workflow-runner-entry.ts:207`) proves the pattern: on a fresh agent step it records the
@@ -107,39 +109,40 @@ Host → worker (only things that genuinely cross the Pi/worker boundary):
 
 ```ts
 type HostMessage =
-  | { id: string; type: "run.start";   workflow: string; input: unknown }
-  | { id: string; type: "run.list";    status?: "active" | "waiting" | "paused" }
-  | { id: string; type: "run.get";     runId: string }
-  | { id: string; type: "run.resume";  runId: string }
-  | { id: string; type: "run.pause";   runId: string }
-  | { id: string; type: "run.cancel";  runId: string }
+  | { id: string; type: "run.start"; workflow: string; input: unknown }
+  | { id: string; type: "run.list"; status?: "active" | "waiting" | "paused" }
+  | { id: string; type: "run.get"; runId: string }
+  | { id: string; type: "run.resume"; runId: string }
+  | { id: string; type: "run.pause"; runId: string }
+  | { id: string; type: "run.cancel"; runId: string }
   | { id: string; type: "run.restart"; runId: string; expectedRevision: number }
-  | { id: string; type: "agent.submit";    requestId: string; output: unknown }
-  | { id: string; type: "agent.update";    requestId: string; update: WorkflowUpdateInput }
+  | { id: string; type: "agent.submit"; requestId: string; output: unknown }
+  | { id: string; type: "agent.update"; requestId: string; update: WorkflowUpdateInput }
   | { id: string; type: "checkpoint.answer"; requestId: string; input: unknown }
-  | { id: string; type: "decision.answer";   requestId: string; response: unknown }
-  | { id: string; type: "settings.patch";    runId: string; patch: JsonPatch };
+  | { id: string; type: "decision.answer"; requestId: string; response: unknown }
+  | { id: string; type: "settings.patch"; runId: string; patch: JsonPatch };
 ```
 
 Worker → host:
 
 ```ts
 type WorkerEvent =
-  | { type: "run.started";  runId: string; state: WorkflowRunState }
-  | { type: "run.changed";  runId: string; state: WorkflowRunState }
-  | { type: "agent.request";    requestId: string; contract: AgentStepContract; prompt: string }
+  | { type: "run.started"; runId: string; state: WorkflowRunState }
+  | { type: "run.changed"; runId: string; state: WorkflowRunState }
+  | { type: "agent.request"; requestId: string; contract: AgentStepContract; prompt: string }
   | { type: "checkpoint.request"; requestId: string; request: CheckpointRequest }
-  | { type: "decision.request";   requestId: string; request: HumanDecisionRequest }
-  | { type: "notification";       notification: WorkflowNotificationRequest }
+  | { type: "decision.request"; requestId: string; request: HumanDecisionRequest }
+  | { type: "notification"; notification: WorkflowNotificationRequest }
   | { type: "run.finished"; runId: string; state: WorkflowRunState };
 
 type WorkerMessage =
-  | { type: "reply"; replyTo: string; result: unknown }   // correlated to a host message id
-  | { type: "error"; replyTo?: string; message: string }  // with replyTo → that request failed
-  | { type: "event"; event: WorkerEvent };                // unsolicited worker→host
+  | { type: "reply"; replyTo: string; result: unknown } // correlated to a host message id
+  | { type: "error"; replyTo?: string; message: string } // with replyTo → that request failed
+  | { type: "event"; event: WorkerEvent }; // unsolicited worker→host
 ```
 
 Notes:
+
 - `reply.result` is the operation's return value (e.g. `{ runId }` for `run.start`, the settled
   receipt for an answer, the new settings scope for `settings.patch`). `run.list` returns a summary
   array of durable runs (id, workflow, status, updatedAt); `run.get` returns the full
@@ -166,14 +169,15 @@ log line would corrupt the protocol stream. Use `child_process.fork()` with an I
 ```ts
 // extension/worker-adapter.ts
 const worker = fork(workerEntry, [], {
-  stdio: ["inherit", "inherit", "inherit", "ipc"],   // stdout/stderr stay ordinary logs
+  stdio: ["inherit", "inherit", "inherit", "ipc"], // stdout/stderr stay ordinary logs
 });
-worker.send(message);                                 // host → worker (a HostMessage with an id)
+worker.send(message); // host → worker (a HostMessage with an id)
 worker.on("message", (msg: WorkerMessage) => {
   if (msg.type === "reply") pending.get(msg.replyTo)?.resolve(msg.result);
   else if (msg.type === "error" && msg.replyTo) pending.get(msg.replyTo)?.reject(msg);
-  else if (msg.type === "error") fatal(msg);          // no replyTo → tear down the worker
-  else eventListeners.forEach((l) => l(msg.event));   // unsolicited WorkerEvent
+  else if (msg.type === "error")
+    fatal(msg); // no replyTo → tear down the worker
+  else eventListeners.forEach((l) => l(msg.event)); // unsolicited WorkerEvent
 });
 // request(): mint an id, register a pending promise, send { id, ... }, await the reply.
 ```
@@ -182,7 +186,7 @@ worker.on("message", (msg: WorkerMessage) => {
 // worker/worker-entry.ts
 process.on("message", async (msg: HostMessage) => {
   try {
-    const result = await dispatch(msg);               // run.start / agent.submit / ...
+    const result = await dispatch(msg); // run.start / agent.submit / ...
     process.send({ type: "reply", replyTo: msg.id, result });
   } catch (error) {
     process.send({ type: "error", replyTo: msg.id, message: errorMessage(error) });
@@ -230,15 +234,21 @@ executor: someExecutor })` with **no worker and no SQLite** (e.g. for tests), or
 
 ## What to keep (preserve semantics)
 
-### `src/workflows/` — the engine (18,903 lines) — KEEP, decouple from server-era state
+### `src/workflows/` — the engine — KEEP as a derived minimal set, decouple from server-era state
+
+The keep list is what the worker path actually uses, not the current file inventory (server-era
+files are listed under "What to remove"):
 
 - `engine.ts` (1,942), `transitions.ts`, `graph.ts`, `composition.ts`, `control-loop.ts`,
-  `loader.ts`, `definition.ts`, `types.ts`, `schema.ts`, `errors.ts`, `diagnostics.ts`, `catalog.ts`
+  `loader.ts`, `definition.ts`, `types.ts`, `schema.ts`, `errors.ts`, `diagnostics.ts`
 - Node types: `agent`, `compute`, `action`, `shell` (`shell.ts`), `checkpoint`, `decision`
   (`decision.ts`), `human-decision.ts` + `decision-presentation.ts`
-- `settings.ts` + `json-patch.ts`, `updates.ts`, `requests.ts`, `queue.ts`, `progress.ts`,
-  `prompt-evidence.ts`, `command-batch.ts`, `text.ts`, `tool-input.ts`,
-  `workflow-message-content.ts`, `session-reducer.ts`
+- `settings.ts` + `json-patch.ts`, `updates.ts`, `requests.ts`, `progress.ts`, `text.ts`,
+  `tool-input.ts`, `workflow-message-content.ts`
+- **Strip server-era imports from kept files (Phase 4):** `requests.ts` and
+  `workflow-message-content.ts` import `state/workflow-messages.js`; `human-decision.ts` imports
+  `state/viewer.js`. Those state modules are removed, so the imports and any code paths that exist
+  only for them must go with them or the tree will not compile.
 - **`store.ts` (5,192) — becomes the worker's `SqliteWorkflowStore`.** The engine depends only on the
   `WorkflowExecutionStore` interface (`store.ts:184-233`). The concrete `WorkflowRunStore` class
   (lines 496-4219) is kept as the SQLite implementation but **stripped of server-era coordination**:
@@ -273,10 +283,11 @@ executor: someExecutor })` with **no worker and no SQLite** (e.g. for tests), or
   ```ts
   const store = new SqliteWorkflowStore(dbPath);
   const engine = new WorkflowEngine({
-    store,                                        // WorkflowExecutionStore
-    executor: new ParkingAgentExecutor(store),    // InteractionStore
+    store, // WorkflowExecutionStore
+    executor: new ParkingAgentExecutor(store), // InteractionStore
     notificationSink: workerNotificationSink,
-    onRunStarted, onEvent,
+    onRunStarted,
+    onEvent,
   });
   ```
   Speaks the tiny protocol over Node's dedicated IPC channel.
@@ -298,6 +309,7 @@ or project-scoping protocol are introduced.
 ## What to remove
 
 ### `src/server/` (12,611 lines) — REMOVE entirely
+
 `server.ts`, `server-entry.ts`, `rpc-bridge.ts`, `rpc-executor.ts`, `lock.ts`, `processes.ts`,
 `recovery.ts`, `state.ts`, `view.ts`, and all runner supervision (`workflow-runner-*`,
 `resource-runner-*`, `child-runner-supervisor.ts`, `channel-supervisor.ts`, `channel-effects.ts`,
@@ -306,30 +318,37 @@ The `InteractiveExecutor` pattern is **re-implemented** as the worker's `parking
 small and self-contained), not carried over.
 
 ### `src/client/` (2,082 lines) — REMOVE entirely
+
 `client.ts` (1,109), `protocol.ts`, `view.ts`, `resolver.ts`, `materialize.ts`, `activity.ts`,
 `index.ts`. The `pi-workflows.client.v1` socket transport goes away. Replaced by the extension's
 `worker-adapter.ts` speaking the tiny protocol to the worker.
 
 ### `src/herdr/` (742) + `src/viewer/` (1,148) + `plugins/herdr` + `tui/` — REMOVE
+
 External TUI viewer, `piw` CLI, Herdr pane-placement adapter, loopback WebSocket relay.
 `package.json`: drop `bin.pi-workflows`, the `./client` and `./resource-managers` exports, and
 `plugins/herdr` + `herdr-plugin.toml` from `files`.
 
 ### `src/resource-managers/` (2,493 lines) — REMOVE entirely
+
 The Kubernetes-style controller runtime. Entirely a multi-process durable-service feature. Remove the
 `./resource-managers` export and `/resource-manager` command.
 
 ### `src/channels/` (1,184 lines) — REMOVE entirely
+
 Telegram decision-channel adapters + supervised children. Human decisions keep their in-Pi
 presentation and `/workflow answer` path; only the external channel transport is removed.
 
 ### `src/builtins/` (10,162 lines) — REMOVE entirely
-The named built-in workflows and helpers. Product content, not engine infrastructure. The loader's
-`catalog` param is optional (`loader.ts:104`), so the worker loads user `*.workflow.ts` files with no
-built-in catalog. Remove the one extension import (`BUILTIN_WORKFLOW_METADATA`, `index.ts:4`) and the
-two server imports (deleted with the server). A deliberate product change.
+
+The named built-in workflows and helpers. Product content, not engine infrastructure. Remove the
+loader's optional `catalog` param in place (`loader.ts:104`; alpha policy — no compatibility shim):
+the worker loads user `*.workflow.ts` files directly. Remove the one extension import
+(`BUILTIN_WORKFLOW_METADATA`, `index.ts:4`) and the two server imports (deleted with the server). A
+deliberate product change.
 
 ### `src/state/` (4,121 lines) — REDUCE to the worker's semantic store support
+
 - **Keep (trimmed):** `json.ts` (48), `database.ts` (389, trimmed to open/verify the worker DB),
   `mutation.ts` (438, trimmed to revision checks only — no lease/token/generation fencing).
 - **Remove:** `viewer.ts` (356), `prune.ts` (839, retention sweeps), `workflow-messages.ts` (861,
@@ -337,6 +356,43 @@ two server imports (deleted with the server). A deliberate product change.
   `project-store.ts` (218).
 - **`attempt-time.ts` (124) — re-home into the worker, do NOT delete.** See "Active-time accounting."
 - `schema.ts` (805) shrinks to the semantic tables the worker store uses.
+
+### `src/workflows/` server-era files — REMOVE (kept by inertia; verified dead in the target world)
+
+- `queue.ts` (2,129) — the run-launch/reservation queue ("one active run per Pi session"). Only
+  used by `src/server/` + the index re-export; imports `project-store`, `viewer`, and
+  `workflow-messages`, all removed above. The worker owns runs directly; there is no cross-process
+  launch queue.
+- `catalog.ts` (154) — built-in catalog registration; only used by `loader.ts` +
+  `src/builtins/`. Goes with the loader's catalog param.
+- `prompt-evidence.ts` (344) + `command-batch.ts` (254) — consumers are only built-ins
+  (autoimplement, sanity-check, change-verification) + index re-exports.
+- `session-reducer.ts` (330) — the `session_entries` journal; sole external consumer is
+  `src/server/view.ts` (viewer projection). Remove it and the `session_entries` table with its
+  store queries.
+
+### Repo artifacts outside `src/` — REMOVE or reduce (base-repo authority shipping with the package)
+
+- `skills/` — delete `autodoc`, `autoimplement`, `autoplan`, `monitor`, `sanity-check` (each
+  requires a built-in workflow that no longer exists). Rewrite only `pi-workflows` for the lean
+  tool surface.
+- `examples/` — keep only generic DSL examples (`echo`, `branch`, `shell`, `two-turn`,
+  `live-settings`, `human-decision`); delete `resource-managers/` and the built-in-specific
+  workflows (autoimplement, autoplan, sanity-check, plain-summary, autoresearch, approved-plan).
+- `fixtures/layout/` (graph-layout fixtures for the removed `render/graph`) and
+  `fixtures/session-events/` (journal fixtures) — delete both.
+- `schemas/` — the ten human-decision JSON schemas are referenced by no code; delete.
+- `protocol/` — spec + fixtures for the removed `pi-workflows.client.v1` socket protocol; delete.
+- `scripts/` — delete `export-layout-fixtures.mjs`, `generate-viewer-benchmark.ts`,
+  `snapshot-api.mjs`; keep `prepare.mjs`; reduce `live-e2e*.mjs` to at most one lean live check
+  (or drop it).
+- `package.json` — also drop the `./builtins` export, the `@earendil-works/pi-tui`
+  devDependency, and `skills`/`examples`/`schemas`/`protocol` from `files` as their contents go.
+- `vitest.config.ts` — rewrite minimal: remove the resource-managers alias, the coverage excludes
+  for removed dirs, and the 85% coverage thresholds. No coverage gate in the lean repo.
+- `README.md` — rewrite as "a lean framework for configuring workflows."
+- `check-baseline.log`, `e2e-baseline.log` at the repo root — delete.
+- `docs/MONITOR.md` — documents the removed monitor built-in; delete, not keep.
 
 ---
 
@@ -354,13 +410,15 @@ ParkingAgentExecutor         │
 ```
 
 ### 1. `WorkflowExecutionStore` (`src/workflows/store.ts:184-233`)
+
 The engine talks to persistence only through this interface. The worker's `SqliteWorkflowStore`
 implements it and owns SQLite directly. No engine call sites change; no `store.*` RPC crosses the
 boundary.
 
 ### 2. `InteractionStore` (new small interface — the parking executor's seam)
+
 The engine persists a parked agent step via `commitTransition` (a `WorkflowExecutionStore` method),
-so resume knows to re-run the node. But the *pending interaction record* that the origin session
+so resume knows to re-run the node. But the _pending interaction record_ that the origin session
 finds and answers is a separate concern. Today it lives only on the server's RPC-backed store
 (`requestInteraction` / `acceptInteraction` / `rejectInteraction`,
 `src/server/workflow-runner-store.ts:160-184`) — **not** on `WorkflowExecutionStore`. If the parking
@@ -391,10 +449,12 @@ interface InteractionStore {
 `SqliteWorkflowStore` implements it (backed by a small `interactions` table). The executor never
 touches the concrete store or any server RPC.
 
-### 3. `AgentStepExecutor` (`src/workflows/types.ts:900-910`) — a *parking* executor in the worker
+### 3. `AgentStepExecutor` (`src/workflows/types.ts:900-910`) — a _parking_ executor in the worker
+
 The engine delegates agent steps via `runAgentStep(...)` (`engine.ts:1350`). The worker's
 `parking-executor.ts` (the `InteractiveExecutor` pattern, `workflow-runner-entry.ts:207`) depends on
 `InteractionStore`, not the concrete store:
+
 - Fresh step → `interactionStore.requestInteraction({ attemptId, kind, contract })` then
   `throw new RunParkedError()`. The engine parks; the worker emits `agent.request` to the host.
 - Resumed with a candidate (after the extension sends `agent.submit`) → validate +
@@ -406,14 +466,17 @@ The **extension** presents the step to the model (reusing `step-message.ts`) and
 worker-adapter (bounded in-process counter, no coordinator epoch).
 
 ### 4. Checkpoint answers
+
 The engine reads a checkpoint answer from `store.readCheckpoint(runId, attemptId)` on resume
 (`engine.ts:1162`). Answering a checkpoint is: settle the checkpoint in the worker's store, then
 resume the parked run via `engine.resumeRun(...)`. The extension sends `checkpoint.answer`; the
 worker settles + resumes.
 
 ### 5. Human decisions — preserve validation/settlement, invoke locally
+
 Do NOT collapse these to "write the settled request." Human decisions carry verification and
 settlement semantics that must be preserved, now invoked in the worker instead of the server:
+
 - Response validation: `validateHumanDecisionResponse` / `validateHumanDecisionSubmission`
   (`src/workflows/human-decision.ts:240,286`) — choice/audience/input validation.
 - Request-integrity checks: `validateHumanDecisionRequestIntegrity`
@@ -426,6 +489,7 @@ then resumes. The settlement logic is unchanged — only its caller moves from `
 into the worker.
 
 ### 6. Notifications (`notify` node)
+
 The engine requires a `WorkflowNotificationSink` when a workflow uses `notify` (`engine.ts:1137`).
 Today it routes over RPC to the server, which creates a `workflowMessages` record targeted at the
 origin Pi session and returns `{ notificationId, targetSessionId }` (`server.ts:4585-4629`). The
@@ -433,8 +497,10 @@ worker's `worker-notification-sink.ts` emits a `notification` message to the hos
 delivers it to the origin Pi session. No RPC, no `workflowMessages` table.
 
 ### 7. Active-time accounting (verified — do not delete `attempt-time.ts` wholesale)
+
 This interacts with node timeout / pause / resume semantics, so it is **semantic**, not a server
 artifact. Verified facts:
+
 - The engine reads accumulated active time and subtracts it from the node timeout on resume:
   `timeoutMs = persistedTimeoutMs - elapsedMs` (`engine.ts:1009`). It never samples active time
   itself.
@@ -461,19 +527,23 @@ workflow behavior is verified **while persistence is unchanged**. The worker + s
 introduced last.
 
 ### Phase 0 — Baseline (no code change)
-- Run `npm run check` and `npm run test:e2e`; record the green baseline.
-- Snapshot the public API surface (`src/workflows/index.ts`, `src/extension/index.ts`) to diff after
-  each phase.
+
+- Record a green baseline with the lean gate only: `npm run typecheck && npm run build &&
+npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage threshold, the
+  e2e baseline ritual, API-surface snapshot diffing) is base-repo authority and does not carry
+  over.
 
 ### Phase 1 — Build the worker (additive; existing store unchanged)
+
 Create `src/worker/`:
+
 - **`worker-entry.ts`** — process entry, speaks the tiny protocol over Node's dedicated IPC channel
   (`process.send` / `process.on("message")`), owns active engines. Constructs engines with the **existing** `WorkflowRunStore` (SQLite) for now:
   ```ts
   const engine = new WorkflowEngine({
     executor: parkingExecutor,
     notificationSink: workerNotificationSink,
-    store: new WorkflowRunStore(dbPath),   // existing SQLite store for now
+    store: new WorkflowRunStore(dbPath), // existing SQLite store for now
     onRunStarted: (_runId, state) => emit("run.started", { runId, state }),
     onEvent: (_event, state) => emit("run.changed", { runId: state.runId, state }),
   });
@@ -482,13 +552,17 @@ Create `src/worker/`:
   park; resumed → validate + accept). Emits `agent.request` to the host on park.
 - **`worker-notification-sink.ts`** — emits `notification` to the host.
 
-Add a slophammer boundary: `src/worker → src/workflows, src/state`. Do NOT touch `src/client/` or
-`src/server/` yet; the old path still compiles.
+The dependency direction from "Architectural constraint" applies to the new code (`src/worker →
+src/workflows, src/state`; no Pi imports). No slophammer or other boundary tooling — the constraint
+is enforced by review until the old layers are gone. Do NOT touch `src/client/` or `src/server/`
+yet; the old path still compiles.
 
 ### Phase 2 — Rewire the extension to the worker (existing store unchanged)
+
 Create `src/extension/worker-adapter.ts` (`fork` the worker with an IPC channel, supervise it,
 correlate request IDs to replies, and expose `await adapter.request(...)` + `adapter.onEvent(...)`).
 In `src/extension/index.ts`:
+
 - Replace `new WorkflowClient(...)` + `ensureAvailable()` (lines 183, 690, 887, 954, 1440) with the
   worker-adapter.
 - `executeCommand` (line 897) and the `workflow` tool (`toolInputToCommand`, line 1363) call
@@ -510,7 +584,9 @@ In `src/extension/index.ts`:
 behavior-preserving before we strip the store.
 
 ### Phase 3 — Delete the client/server stack + builtins (verify green)
+
 Delete, in dependency order (leaves first):
+
 1. `src/channels/` + its extension wiring (`/workflow-channel`).
 2. `src/resource-managers/` + `/resource-manager` command + export.
 3. `src/herdr/`, `src/viewer/`, `plugins/herdr`, `tui/`, `herdr-plugin.toml`.
@@ -521,18 +597,25 @@ Delete, in dependency order (leaves first):
 7. `src/builtins/` + the extension's `BUILTIN_WORKFLOW_METADATA` import (`index.ts:4`) and its use
    (line 1356).
 
-Update `package.json` (drop `bin`, `./client`, `./resource-managers` exports, herdr files) and
-`slophammer.yml` (remove the server/client/herdr/viewer/resource-managers/channels/builtins
-boundaries; add `src/worker`).
+Update `package.json` (drop `bin`, the `./client`, `./resource-managers`, and `./builtins`
+exports, the `@earendil-works/pi-tui` devDependency, herdr files, and the removed artifact dirs
+from `files`). Delete `slophammer.yml` entirely — no boundary tooling carries over.
 
 At the end of Phase 3 the system runs as `Pi → worker → WorkflowEngine → existing SQLite store`.
 Behavior is already verified from Phase 2.
 
 ### Phase 4 — Strip the store to a clean semantic `SqliteWorkflowStore`
+
 Now that the server is gone, reduce `src/workflows/store.ts` + `src/state/`:
+
 - Remove server-era coordination from `WorkflowRunStore`: lease/token/generation fencing, viewer
-  projections, session message queue. Keep the semantic tables and the `WorkflowExecutionStore`
-  interface. Rename to `SqliteWorkflowStore` (or keep the name; the interface is what matters).
+  projections, session message queue, and the `session_entries` journal (queries + table). Keep the
+  semantic tables and the `WorkflowExecutionStore` interface. Rename to `SqliteWorkflowStore` (or
+  keep the name; the interface is what matters).
+- Remove the server-era engine files: `queue.ts`, `catalog.ts` (+ the loader's optional catalog
+  param), `prompt-evidence.ts`, `command-batch.ts`, `session-reducer.ts`.
+- Strip server-era imports from kept files: `requests.ts` and `workflow-message-content.ts`
+  (`state/workflow-messages.js`), `human-decision.ts` (`state/viewer.js`).
 - Re-home active-time sampling into the worker (per "Active-time accounting").
 - Remove `src/state/`: `viewer.ts`, `prune.ts`, `workflow-messages.ts`, `project-store.ts`. Trim
   `schema.ts`, `database.ts`, `mutation.ts` to the semantic store's needs. Keep `attempt-time.ts`
@@ -542,15 +625,18 @@ Re-run the full behavior checklist. This is the only phase that changes the stor
 Phases 1–3 already proved the integration, any regression here is isolated to the store strip.
 
 ### Phase 5 — Tests + docs
+
+- **Test reduction target: 118 test files → ~25–35.** Remove every server/client/herdr/viewer/
+  resource-manager/channel/builtins test file, then reduce the engine tests to one file per
+  behavior-checklist item plus the worker integration and durable-resume suites below. The 85%
+  coverage threshold is gone; do not re-add tests to satisfy a coverage gate.
 - Engine unit tests instantiate `WorkflowEngine` directly with a store — they already work against
-  the interface. Keep them; add a `MemoryWorkflowStore` for fast in-process tests (no worker, no
-  SQLite).
-- Remove server/client/herdr/viewer/resource-manager/channel test files (a large chunk of the 115).
+  the interface; add a `MemoryWorkflowStore` for fast in-process tests (no worker, no SQLite).
 - Add worker integration tests: start/status/pause/resume/cancel/restart over the protocol,
   agent-step park + submit rendezvous, checkpoint continuation, decision answer (validation +
   timeout/default), settings patch, notification delivery, missing-submission reminder bound,
   post-workflow turn.
-- **Durable-resume tests** — for each, kill Pi *and* the worker, restart both, then resume the same
+- **Durable-resume tests** — for each, kill Pi _and_ the worker, restart both, then resume the same
   run and assert the pending interaction is reconstructed and re-presented:
   - a checkpoint is waiting;
   - an agent step is waiting for submission;
@@ -559,11 +645,16 @@ Phases 1–3 already proved the integration, any regression here is isolated to 
   - the run is paused.
 - Update `docs/`: rewrite `WORKFLOWS.md` (drop server/runner/socket sections; add the worker +
   protocol), delete `WORKFLOW_SERVER.md`, `RESOURCE_MANAGERS.md`, `TUI_VIEWER.md`,
-  `LIVE_REPLAY_PROTOCOL.md`, `SESSION_EVENT_JOURNAL.md`; replace `SQLITE_STATE.md` with a short
-  "worker SQLite state" note. Keep `CONTROL_LOOPS.md`, `HUMAN_DECISIONS.md`,
-  `WORKFLOW_COMPOSITION.md`, `WORKFLOW_UPDATES.md`, `MONITOR.md`, `DESIGN_PHILOSOPHY.md` (trim
-  durable-runs/required-recovery to the worker reality). Update `AGENTS.md` dependency-boundary
-  notes.
+  `LIVE_REPLAY_PROTOCOL.md`, `SESSION_EVENT_JOURNAL.md`, `MONITOR.md`; replace `SQLITE_STATE.md`
+  with a short "worker SQLite state" note. Keep `CONTROL_LOOPS.md`, `HUMAN_DECISIONS.md`,
+  `WORKFLOW_COMPOSITION.md`, `WORKFLOW_UPDATES.md`, `DESIGN_PHILOSOPHY.md` (trim
+  durable-runs/required-recovery to the worker reality).
+- **Replace `AGENTS.md` wholesale** with a short lean doc: the check command (typecheck + build +
+  test, no coverage), the dependency direction, temp-dir-only tests, and the two recovery
+  behaviors stated as this repo's own design decisions. No inherited mandates, no slophammer, no
+  real-model E2E requirement unless you add one back deliberately.
+- Apply the "Repo artifacts outside `src/`" removals (skills, examples, fixtures, schemas,
+  protocol, scripts, README rewrite, baseline logs).
 
 ---
 
@@ -590,7 +681,6 @@ workflows/core must not know the concrete SQLite implementation
 sqlite must not know Pi
 worker must not know Pi presentation APIs
 ```
-
 
 ## Workflow-language behavior checklist (must stay green)
 
@@ -635,20 +725,25 @@ them by default; flag any you want kept and we add it back as an opt-in.
 
 ## Estimated reduction
 
-| Area | Lines | Action |
-| --- | --- | --- |
-| `src/server/` | 12,611 | remove |
-| `src/client/` | 2,082 | remove |
-| `src/resource-managers/` | 2,493 | remove |
-| `src/viewer/` + `src/herdr/` | 1,890 | remove |
-| `src/channels/` | 1,184 | remove |
-| `src/builtins/` | 10,162 | remove |
-| `src/render/` (4 files) | ~1,372 | remove |
-| `src/state/` (4 files) | ~2,280 | remove; trim rest |
-| `src/workflows/store.ts` server-era coordination | ~1,500 | strip (keep semantic store) |
-| **Total removed/replaced** | **~35,000+** | of ~51,000 src lines |
+| Area                                                                                                | Lines        | Action                      |
+| --------------------------------------------------------------------------------------------------- | ------------ | --------------------------- |
+| `src/server/`                                                                                       | 12,611       | remove                      |
+| `src/client/`                                                                                       | 2,082        | remove                      |
+| `src/resource-managers/`                                                                            | 2,493        | remove                      |
+| `src/viewer/` + `src/herdr/`                                                                        | 1,890        | remove                      |
+| `src/channels/`                                                                                     | 1,184        | remove                      |
+| `src/builtins/`                                                                                     | 10,162       | remove                      |
+| `src/render/` (4 files)                                                                             | ~1,372       | remove                      |
+| `src/state/` (4 files)                                                                              | ~2,280       | remove; trim rest           |
+| `src/workflows/store.ts` server-era coordination                                                    | ~1,500       | strip (keep semantic store) |
+| `src/workflows/` server-era files (queue, catalog, prompt-evidence, command-batch, session-reducer) | ~3,211       | remove                      |
+| **Total removed/replaced**                                                                          | **~38,000+** | of ~51,000 src lines        |
+
+Beyond `src/`: 118 test files reduced to ~25–35; `skills/` (5 of 6 deleted), built-in-specific
+`examples/`, both `fixtures/` dirs, `schemas/`, `protocol/`, most of `scripts/`, `slophammer.yml`,
+the baseline logs, and `docs/MONITOR.md` removed; `README.md` rewritten.
 
 Kept: `src/workflows/` engine + stripped `SqliteWorkflowStore`, `src/extension/` (rewired to the
 worker adapter), new `src/worker/` (entry + parking executor + notification sink),
-`src/render/{format,node-type}.ts`. User `*.workflow.ts` files still load via the loader's optional
-catalog param.
+`src/render/{format,node-type}.ts`. User `*.workflow.ts` files still load directly (the loader's
+catalog param is removed, not left optional).

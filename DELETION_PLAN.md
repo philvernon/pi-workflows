@@ -1,0 +1,57 @@
+# Deletion plan: what can go right now, and what falls out later
+
+Companion to `PLAN.md`. "Right now" means: delete these and `npm run typecheck && npm run build
+&& npm run test` stays green with **no other changes**. Every entry below was verified against the
+current tree (import graph over `src/`, plus reference greps across `src`, `test`, `scripts`,
+`package.json`, tsconfig, and vitest configs).
+
+## Delete now — zero references
+
+| Target                                                                                                          | Size    | Evidence                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/client/activity.ts`                                                                                        | 7 ln    | Two constants (`ORIGIN_ACTIVITY_REFRESH_MS`, `ORIGIN_ACTIVITY_LEASE_MS`) imported by nothing in `src/` or `test/`                                                                                                                         |
+| `src/state/index.ts`                                                                                            | 44 ln   | Barrel file; zero importers anywhere, including same-dir `./index.js` imports                                                                                                                                                             |
+| `schemas/` (10 JSON files)                                                                                      | —       | No reference in `src`, `test`, `scripts`, `package.json`, tsconfig, or vitest configs. Only listed in `package.json` `files`, which tolerates a missing dir                                                                               |
+| `scripts/generate-viewer-benchmark.ts`                                                                          | —       | Referenced only by docs prose (`docs/DEVELOPMENT.md`); in no npm script                                                                                                                                                                   |
+| `scripts/snapshot-api.mjs` + `docs/api-snapshot/` (`BASELINE.md`, `extension-index.txt`, `workflows-index.txt`) | 4 files | The API-snapshot baseline ritual; cross-referenced only by each other and docs. In no npm script                                                                                                                                          |
+| ~~`scripts/live-e2e.d.mts`~~                                                                                    | —       | **Not deletable** — it is the type declaration for `scripts/live-e2e.mjs`, which `test/live-e2e-script.test.ts` imports; deleting it breaks typecheck. The original "zero references" check missed declaration-file resolution. Restored. |
+| `check-baseline.log`, `e2e-baseline.log` (repo root)                                                            | —       | Mentioned only in `PLAN.md`                                                                                                                                                                                                               |
+
+## Delete now — clean pairs (file + its only references)
+
+| Target                                                                                                                                                                                 | Size                           | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/extension/session-delivery.ts` **and** `test/session-delivery.test.ts`                                                                                                            | 175 ln + test                  | Dead in production code: zero `src/` importers (not even `extension/index.ts`). Only its own test references it. Delete both together; suite stays green. `PLAN.md` lists it under "trim to what the worker path needs" — it needs deletion, not trimming                                                                                                                                                                                     |
+| `skills/{autodoc,autoimplement,autoplan,monitor,sanity-check}` **and** `test/bundled-skills.test.ts`, plus the one `skills/` guard assertion in `test/component-vocabulary.test.ts:90` | 5 skill dirs + 1 test + 1 line | No runtime code references the dir (`pi-agent-group.ts:1003` is a `skills: []` config field, not a path). Only `bundled-skills.test.ts` reads it and `component-vocabulary.test.ts:90` asserts its presence — that test is a repo-wide retired-term linter whose other assertions stay, so delete line 90, not the file. Product note: these skills launch built-ins that Phase 3 removes anyway; taking them now is consistent, just earlier |
+
+**Total immediately deletable:** ~226 lines of `src/`, 5 skill dirs, `schemas/`, 2 scripts,
+1 test file + 2 assertion lines, the api-snapshot docs, and 2 baseline logs. No changes to any
+other file required.
+
+**Known pre-existing failures (not caused by these deletions — verified identical on the clean
+tree):** `test/component-vocabulary.test.ts` fails 3 cases because untracked `.pwtest/` Playwright
+artifacts in the working tree match its retired-`host`-term sweep, and `docs/plans/` no longer
+exists (the dated-plan guard was removed above as part of this batch). The full suite also has
+~17 failing files on the clean tree; most are Phase 3/5 casualties per `PLAN.md`.
+
+## Not deletable yet — what keeps each alive, and when it falls out
+
+| Target                                           | Kept alive by                                                                                                                                                                                                                                                   | Falls out in                                                                                                    |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `src/viewer/render.ts` (362 ln)                  | Zero `src/` importers, but 3 test files import specific functions: `test/engine-more.test.ts` (`renderRunListLines`, `statusLabel`), `test/review-fixes.test.ts` (`renderRunDetailLines`), `test/render.test.ts` (several). Needs test surgery, not a clean cut | Phase 3, with `src/viewer/`                                                                                     |
+| `protocol/` (`client.v1.schema.json` + fixtures) | 3 test files: `test/client-protocol.test.ts`, `test/client-boundary.test.ts`, and `test/server-view.test.ts` (the last tests server code that stays until Phase 3 and needs `fixtures/run-view-controls-v1.json`)                                               | Phase 3, with `src/client/` + `src/server/`                                                                     |
+| `fixtures/layout/`                               | `test/layout-fixtures.test.ts`, `test/graph.test.ts`, `test/helpers/layout-fixtures.ts`, `test/helpers/random-workflows.ts`, plus the npm `fixtures` script (`scripts/export-layout-fixtures.mjs`)                                                              | Phase 3, with `src/render/graph*.ts` (trivial pair for the generator: script + `package.json` `fixtures` entry) |
+| `fixtures/session-events/`                       | `test/session-reducer.test.ts`, which also covers the still-live `src/workflows/session-reducer.ts` store path                                                                                                                                                  | Phase 4, with `session-reducer.ts` + the `session_entries` table                                                |
+| `examples/`                                      | 16 test files load example workflows at runtime (incl. `sqlite-lifecycle`, `run-queue`, `store`, `extension-args`, `examples`, `server-protocol-state`, `run-fencing`, `human-decision-store`)                                                                  | Phase 5, with the test reduction (keep only the generic DSL examples per `PLAN.md`)                             |
+| ~~`skills/` (5 built-in skills)~~                | Deleted in the "delete now" batch: no runtime reference; only `test/bundled-skills.test.ts` + one guard assertion in `test/component-vocabulary.test.ts` kept it alive                                                                                          | Done (pair), or could have waited for Phase 3 with `src/builtins/`                                              |
+| `assets/cover.svg`                               | `README.md` image                                                                                                                                                                                                                                               | With the README rewrite (Phase 5)                                                                               |
+
+## Verification command
+
+After the "delete now" batch:
+
+```bash
+npm run typecheck && npm run build && npm run test
+```
+
+(No coverage gate — see `PLAN.md` Phase 0.)
