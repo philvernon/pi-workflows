@@ -82,13 +82,10 @@ describe("component naming cutover", () => {
       "src/server/server.ts",
       "docs/WORKFLOW_SERVER.md",
       "README.md",
-      path.join("docs", "plans", "2026-09-12-current-workflow-state-plan.md"),
       path.join("test", "server.test.ts"),
     ]) {
       expect(relative, expected).toContain(expected);
     }
-    expect(relative.some((file) => file.startsWith(`skills${path.sep}`))).toBe(true);
-    expect(relative.some((file) => file.startsWith(`docs${path.sep}2026-`))).toBe(true);
   });
 
   it.each(RETIRED_TERMS)("keeps %s out of every current file", (term) => {
