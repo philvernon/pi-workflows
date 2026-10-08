@@ -118,6 +118,7 @@ type HostMessage =
   | { id: string; type: "run.restart"; runId: string; expectedRevision: number }
   | { id: string; type: "agent.submit"; requestId: string; output: unknown }
   | { id: string; type: "agent.update"; requestId: string; update: WorkflowUpdateInput }
+  | { id: string; type: "notification.delivered"; notificationRequestId: string; ok: boolean; error?: string }
   | { id: string; type: "checkpoint.answer"; requestId: string; input: unknown }
   | { id: string; type: "decision.answer"; requestId: string; response: unknown }
   | { id: string; type: "settings.patch"; runId: string; patch: JsonPatch };
@@ -132,7 +133,11 @@ type WorkerEvent =
   | { type: "agent.request"; requestId: string; contract: AgentStepContract; prompt: string }
   | { type: "checkpoint.request"; requestId: string; request: CheckpointRequest }
   | { type: "decision.request"; requestId: string; request: HumanDecisionRequest }
-  | { type: "notification"; notification: WorkflowNotificationRequest }
+  | {
+      type: "notification.request";
+      notificationRequestId: string;
+      notification: WorkflowNotificationRequest;
+    }
   | { type: "run.finished"; runId: string; state: WorkflowRunState };
 
 type WorkerMessage =
@@ -293,11 +298,12 @@ files are listed under "What to remove"):
   Speaks the tiny protocol over Node's dedicated IPC channel.
 - **`parking-executor.ts`** — implements `AgentStepExecutor` (the `InteractiveExecutor` pattern),
   depending only on `InteractionStore`: fresh step → `interactionStore.requestInteraction(...)` +
-  `throw new RunParkedError()`; resumed-with-candidate → validate + `request.accept(...)`, and on
-  rejection `interactionStore.settleInteraction({ outcome: "rejected" })` + re-park. Sets
+  `throw new RunParkedError()`; resumed-with-persisted-candidate → read it back, validate +
+  `request.accept(...)`, then `acceptInteraction(...)` or `rejectInteraction(...)` + re-park. Sets
   `preservesActiveTimeBudget = true` and `assistantMessageMode = "visible"`.
 - **`worker-notification-sink.ts`** — implements `WorkflowNotificationSink`; emits a
-  `notification` message to the host instead of routing over RPC.
+  `notification.request` event, awaits the correlated `notification.delivered` ack, and returns the
+  receipt (see seam 6).
 
 **Worker startup context:** the worker is spawned by the Pi extension and inherits the Pi process
 working directory. It either receives the SQLite DB path directly at startup or derives it from that
@@ -435,19 +441,40 @@ interface InteractionStore {
     contract: JsonValue;
   }): Promise<void>;
   readInteraction(attemptId: string): Promise<StoredInteraction | undefined>;
-  settleInteraction(options: {
+  submitInteraction(options: {
+    requestId: string;
+    submissionId: string;
+    value: JsonValue;
+  }): Promise<void>;
+  acceptInteraction(options: {
     requestId: string;
     submissionId: string;
     attemptId: string;
-    outcome: "accepted" | "rejected";
-    value?: JsonValue;
-    error?: string;
+    value: JsonValue;
+  }): Promise<void>;
+  rejectInteraction(options: {
+    requestId: string;
+    submissionId: string;
+    attemptId: string;
+    error: string;
   }): Promise<void>;
 }
 ```
 
 `SqliteWorkflowStore` implements it (backed by a small `interactions` table). The executor never
 touches the concrete store or any server RPC.
+
+The record moves through **`pending → validating → accepted | rejected`**, mirroring the current
+server flow, where `beginInteractionValidation` persists the candidate with status "validating"
+*before* the run resumes (`server.ts:2669+`) and the resumed runner re-bootstraps with that
+candidate (`workflow-runner-entry.ts:50,365`). Consequences for the worker:
+
+- The `agent.submit` handler calls `submitInteraction(...)` **before** `engine.resumeRun(...)`, so
+  a worker crash between submission and validation re-bootstraps with the persisted candidate
+  instead of silently losing the submission. Idempotent on `(requestId, submissionId)`.
+- The resumed parking executor reads the candidate back via `readInteraction(attemptId)`, validates,
+  and records `acceptInteraction(...)` or `rejectInteraction(...)`; rejection returns the record to
+  `pending` so the model can correct.
 
 ### 3. `AgentStepExecutor` (`src/workflows/types.ts:900-910`) — a _parking_ executor in the worker
 
@@ -457,13 +484,22 @@ The engine delegates agent steps via `runAgentStep(...)` (`engine.ts:1350`). The
 
 - Fresh step → `interactionStore.requestInteraction({ attemptId, kind, contract })` then
   `throw new RunParkedError()`. The engine parks; the worker emits `agent.request` to the host.
-- Resumed with a candidate (after the extension sends `agent.submit`) → validate +
-  `request.accept(output)`; on rejection, `interactionStore.settleInteraction({ outcome: "rejected" })`
-  and re-park so the model can correct.
+- `agent.submit` → the worker persists the candidate via `submitInteraction(...)` **before**
+  resuming (crash-safe; see seam 2), then `engine.resumeRun(...)`.
+- Resumed with a persisted candidate → the executor reads it back, validates via
+  `request.accept(output)` (assistant steps use the assistant validation), and records
+  `acceptInteraction(...)` or `rejectInteraction(...)` + re-park so the model can correct.
 
 The **extension** presents the step to the model (reusing `step-message.ts`) and sends
 `agent.submit` / `agent.update`. **Missing-submission reminders** live in the extension's
 worker-adapter (bounded in-process counter, no coordinator epoch).
+
+**`agent.update` while parked:** there is no live `AgentStepRequest.publishUpdate` after
+`RunParkedError` unwinds — the engine's `publishUpdate` throws unless the attempt is its active
+attempt (`engine.ts:162-175`). The worker resolves the durable interaction to its run/attempt and
+calls the store's semantic operation directly: `store.publishUpdate(runId, nodeId, attemptId,
+update)` (`store.ts:1561`), whose check already accepts a parked attempt
+(`state.currentNode ?? state.waitingOn === nodeId`). No ephemeral callback is retained in memory.
 
 ### 4. Checkpoint answers
 
@@ -488,13 +524,33 @@ The extension sends `decision.answer`; the worker runs these same functions, set
 then resumes. The settlement logic is unchanged — only its caller moves from `src/server/server.ts`
 into the worker.
 
-### 6. Notifications (`notify` node)
+### 6. Notifications (`notify` node) — request/ack, not fire-and-forget
 
-The engine requires a `WorkflowNotificationSink` when a workflow uses `notify` (`engine.ts:1137`).
-Today it routes over RPC to the server, which creates a `workflowMessages` record targeted at the
-origin Pi session and returns `{ notificationId, targetSessionId }` (`server.ts:4585-4629`). The
-worker's `worker-notification-sink.ts` emits a `notification` message to the host; the extension
-delivers it to the origin Pi session. No RPC, no `workflowMessages` table.
+The engine requires a `WorkflowNotificationSink` when a workflow uses `notify` (`engine.ts:1137`),
+and the sink contract is **request/receipt**: `notify(request): MaybePromise<WorkflowNotificationReceipt>`
+(`types.ts:929-930`). The notify node's output **is the receipt** — `const receipt = await
+this.notificationSink.notify(...); return { output: receipt }` (`engine.ts:1148-1156`) — so a
+fire-and-forget event would change durable state. Today the server assembles the receipt
+(`{ notificationId, targetSessionId }`, with
+`notificationId = notification-${runId}-${attemptId}-${index}`, `server.ts:4581-4630`) after
+enqueuing a `workflowMessages` record for the origin session.
+
+In the worker this becomes a tiny request/ack interaction:
+
+```text
+worker → extension   event { type: "notification.request", notificationRequestId, notification }
+extension → worker   { id, type: "notification.delivered", notificationRequestId, ok, error? }
+```
+
+- The worker's `worker-notification-sink.ts` emits the `notification.request` event and **awaits**
+  the correlated ack. On `ok` it returns the receipt `{ notificationId, targetSessionId }`, computed
+  exactly as today — both values are already known to the worker (the deterministic id formula and
+  the run's origin session), so the ack confirms delivery only; it does not carry the receipt.
+- On ack error or timeout the sink returns the receipt anyway: today's semantics are "receipt =
+  enqueued for the origin session", and a failed Pi delivery never fails the node. Delivery is
+  at-least-once across worker restarts (a re-run notify node recomputes the same
+  `notificationIndex`/`notificationId`), so the extension dedupes by `notificationId`.
+- No RPC, no `workflowMessages` table.
 
 ### 7. Active-time accounting (verified — do not delete `attempt-time.ts` wholesale)
 
@@ -554,7 +610,8 @@ Create `src/worker/`:
   ```
 - **`parking-executor.ts`** — the `InteractiveExecutor` pattern (fresh → `requestInteraction` +
   park; resumed → validate + accept). Emits `agent.request` to the host on park.
-- **`worker-notification-sink.ts`** — emits `notification` to the host.
+- **`worker-notification-sink.ts`** — emits `notification.request`, awaits the correlated
+  `notification.delivered` ack, returns the receipt (see seam 6).
 
 The dependency direction from "Architectural constraint" applies to the new code (`src/worker →
 src/workflows, src/state`; no Pi imports). No slophammer or other boundary tooling — the constraint
