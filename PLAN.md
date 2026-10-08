@@ -620,10 +620,12 @@ introduced last. Every phase ends with the acceptance gate below, on its committ
 2. **Lean gate green.** `npm run typecheck && npm run build && npm run test` passes with no new
    failures against the triaged Phase 0 baseline. `test/extension.skip.test.ts` stays excluded from
    the default run until Phase 2 rewires it.
-3. **No old regime.** The base-repo pre-finish checks are not part of acceptance: no `npm run
-   check` coverage thresholds, no `test:e2e` baseline ritual, no slophammer, no API-surface
-   snapshots, no real-model live E2E. Do not run them to accept a phase; do not re-add tests to
-   satisfy them.
+3. **No old regime.** No base-repo authority stands on this branch: `AGENTS.md` is deleted (up
+   front, in Phase 0), so none of its inherited mandates apply — and its pre-finish checks are not
+   part of acceptance: no `npm run check` coverage thresholds, no `test:e2e` baseline ritual, no
+   slophammer, no API-surface snapshots, no real-model live E2E. Do not run them to accept a phase;
+   do not re-add tests to satisfy them. The one mandate that survives is the two recovery
+   behaviors, required by "Goal" above and specified in `docs/DESIGN_PHILOSOPHY.md`.
 4. **Behavior checklist scope.** Phases 2 and 4 additionally re-verify the full workflow-language
    behavior checklist at the end of this plan — Phase 2 with persistence unchanged, Phase 4
    against the stripped store. Every phase re-verifies only the checklist items its change could
@@ -644,7 +646,9 @@ introduced last. Every phase ends with the acceptance gate below, on its committ
 - Record a baseline with the lean gate only: `npm run typecheck && npm run build &&
 npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage threshold, the
   e2e baseline ritual, API-surface snapshot diffing) is base-repo authority and does not carry
-  over.
+  over. **`AGENTS.md` itself is deleted up front** — none of its authority stands on this branch
+  for the whole overhaul; Phase 5 writes the lean replacement. Its one unique mandate (the two
+  recovery behaviors) is preserved by "Goal" above and `docs/DESIGN_PHILOSOPHY.md`.
 - **Triage the pre-existing failures first.** The clean tree already carries ~17 failing test
   files, so "verify green" has no working gate today. For each: fix it, delete it (if it tests
   doomed code), or document it as known-failing with a reason. Later phases' "verify green" steps
@@ -806,10 +810,11 @@ Phases 1–3 already proved the integration, any regression here is isolated to 
   with a short "worker SQLite state" note. Keep `CONTROL_LOOPS.md`, `HUMAN_DECISIONS.md`,
   `WORKFLOW_COMPOSITION.md`, `WORKFLOW_UPDATES.md`, `DESIGN_PHILOSOPHY.md` (trim
   durable-runs/required-recovery to the worker reality).
-- **Replace `AGENTS.md` wholesale** with a short lean doc: the check command (typecheck + build +
-  test, no coverage), the dependency direction, temp-dir-only tests, and the two recovery
-  behaviors stated as this repo's own design decisions. No inherited mandates, no slophammer, no
-  real-model E2E requirement unless you add one back deliberately.
+- **Write the lean `AGENTS.md` replacement** (the base-repo file was deleted up front, in Phase
+  0): the check command (typecheck + build + test, no coverage), the dependency direction,
+  temp-dir-only tests, and the two recovery behaviors stated as this repo's own design decisions.
+  No inherited mandates, no slophammer, no real-model E2E requirement unless you add one back
+  deliberately.
 - Apply the "Repo artifacts outside `src/`" removals (skills, examples, fixtures, schemas,
   protocol, scripts, README rewrite, baseline logs).
 
