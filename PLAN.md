@@ -529,7 +529,7 @@ introduced last.
 ### Phase 0 — Baseline (no code change)
 
 - Record a baseline with the lean gate only: `npm run typecheck && npm run build &&
-  npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage threshold, the
+npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage threshold, the
   e2e baseline ritual, API-surface snapshot diffing) is base-repo authority and does not carry
   over.
 - **Triage the pre-existing failures first.** The clean tree already carries ~17 failing test

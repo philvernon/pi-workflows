@@ -75,6 +75,7 @@ viewer+client hybrid — everything it touches dies in Phase 3), `cli.test.ts` (
 
 **Skipped on purpose — they test surviving code or the e2e net, so they are not simple
 deletions:**
+
 - `loader.test.ts` (290) — tests the surviving `workflows/loader.ts`; builtins are only fixtures.
 - `session-run-adapter.test.ts` (210) + `workflow-message-coordinator.test.ts` (988) — test
   surviving extension code but import `src/client/` (the coordinator test also imports

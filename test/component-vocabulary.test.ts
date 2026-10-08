@@ -78,11 +78,7 @@ describe("component naming cutover", () => {
     // Guard the guard: the sweep must reach the sources, the documentation, the
     // skills, the dated records, and the tests.
     const relative = files.map((file) => file.relative);
-    for (const expected of [
-      "src/server/server.ts",
-      "docs/WORKFLOW_SERVER.md",
-      "README.md",
-    ]) {
+    for (const expected of ["src/server/server.ts", "docs/WORKFLOW_SERVER.md", "README.md"]) {
       expect(relative, expected).toContain(expected);
     }
   });
