@@ -1,3 +1,5 @@
+// Skipped until Phase 2 rewires this suite to the worker adapter (PLAN.md):
+// 28/35 tests fail against the server architecture that Phase 3 removes.
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";

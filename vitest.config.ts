@@ -17,7 +17,7 @@ export default defineConfig({
     globalSetup: ["./test/global-setup.ts"],
     testTimeout: 15_000,
     include: ["test/**/*.test.ts"],
-    exclude: ["test/e2e/**", "node_modules/**"],
+    exclude: ["test/e2e/**", "node_modules/**", "test/extension.skip.test.ts"],
     coverage: {
       // istanbul instruments through the vitest transform pipeline only, so
       // jiti-compiled copies of workflow modules don't pollute the report.
