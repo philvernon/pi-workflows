@@ -472,8 +472,12 @@ interface InteractionStore {
 }
 ```
 
-`SqliteWorkflowStore` implements it (backed by a small `interactions` table). The executor never
-touches the concrete store or any server RPC.
+`InteractionStore` is a small semantic interface over the **existing** `interactive_requests` and
+`interactive_submissions` persistence (`state/schema.ts:515,636`) — which already carries the full
+state machine, including the `validating` submission outcome and idempotency via
+`UNIQUE(request_id, idempotency_key)`. Re-home the required operations from server state into the
+worker/store layer; do not introduce a new interaction schema. The executor never touches the
+concrete store or any server RPC.
 
 The record moves through **`pending → validating → accepted | rejected`**, mirroring the current
 server flow, where `beginInteractionValidation` persists the candidate with status "validating"
