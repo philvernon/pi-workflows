@@ -29,7 +29,7 @@ const RETIRED_TERMS = [
 const RETIRED_NAME = /host/iu;
 
 const TEXT_SUFFIX = /\.(?:cjs|json|jsonc|js|md|mjs|mts|py|rs|sh|toml|ts|ya?ml)$/u;
-const SKIP_DIRECTORY = new Set([".git", "coverage", "dist", "node_modules", "target"]);
+const SKIP_DIRECTORY = new Set([".git", ".pwtest", "coverage", "dist", "node_modules", "target"]);
 const SKIP_FILE = new Set(["package-lock.json"]);
 
 interface WalkedFile {
