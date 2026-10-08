@@ -612,7 +612,32 @@ sampling calls are re-homed into the worker.
 
 The ordering keeps the existing SQLite `WorkflowRunStore` in place through Phases 1–2, so all
 workflow behavior is verified **while persistence is unchanged**. The worker + stripped store are
-introduced last.
+introduced last. Every phase ends with the acceptance gate below, on its committed tree.
+
+### Acceptance gate (run at the end of every phase)
+
+1. **Committed tree.** The phase's changes are committed and `git status` reports a clean tree.
+2. **Lean gate green.** `npm run typecheck && npm run build && npm run test` passes with no new
+   failures against the triaged Phase 0 baseline. `test/extension.skip.test.ts` stays excluded from
+   the default run until Phase 2 rewires it.
+3. **No old regime.** The base-repo pre-finish checks are not part of acceptance: no `npm run
+   check` coverage thresholds, no `test:e2e` baseline ritual, no slophammer, no API-surface
+   snapshots, no real-model live E2E. Do not run them to accept a phase; do not re-add tests to
+   satisfy them.
+4. **Behavior checklist scope.** Phases 2 and 4 additionally re-verify the full workflow-language
+   behavior checklist at the end of this plan — Phase 2 with persistence unchanged, Phase 4
+   against the stripped store. Every phase re-verifies only the checklist items its change could
+   touch.
+5. **Phase-specific proof**, on top of 1–4:
+   - Phase 0 — triage outcome recorded in this plan; lean gate green and fast.
+   - Phase 1 — the worker compiles, spawns over IPC, and answers every host message type; the old
+     client/server path still compiles untouched.
+   - Phase 2 — the extension speaks only to the worker adapter; the rewired extension suites pass.
+   - Phase 3 — deletions complete with no dangling references to the removed directories; the
+     migrated e2e suite passes when run.
+   - Phase 4 — durable resume still works against the stripped store.
+   - Phase 5 — test files within the target range; docs and repo-artifact removals landed with the
+     phase.
 
 ### Phase 0 — Baseline (no code change)
 
