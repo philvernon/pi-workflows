@@ -57,6 +57,34 @@ Companion minimal fix: `.pwtest` added to `SKIP_DIRECTORY` in `test/component-vo
 — untracked Playwright artifacts in the working tree tripped its retired-term sweep (pre-existing
 local failure, now robust against them).
 
+## Third batch — builtins and client tests (pulled forward from Phase 3)
+
+Deleted by the same explicit decision: 20 test files (~11,500 lines) that test `src/builtins/`
+and `src/client/`, both removed in Phase 3.
+
+**Builtins (16 files, ~9,300 lines):** `builtin-autoimplement` (2,379), `pi-agent-group` (1,455),
+`change-verification` (1,150), `monitor-workflow` (674), `autoimplement-plan-discovery` (393),
+`workspace-preparation` (424), `monitor-human-approval` (475), `monitor-repair` (417),
+`builtin-autodoc` (339), `sanity-check-workflow` (313), `builtin-autoplan` (301),
+`autoimplement-command-batches` (256), `plan-approval` (241), `plan-change` (183),
+`catalog` (162, covers `workflows/catalog.ts` which goes in Phase 4), `builtin-plain-summary` (143).
+
+**Client (4 files, ~2,200 lines):** `client.test.ts` (1,405), `viewer-client.test.ts` (299,
+viewer+client hybrid — everything it touches dies in Phase 3), `cli.test.ts` (232, the piw CLI),
+`client-protocol.test.ts` (231).
+
+**Skipped on purpose — they test surviving code or the e2e net, so they are not simple
+deletions:**
+- `loader.test.ts` (290) — tests the surviving `workflows/loader.ts`; builtins are only fixtures.
+- `session-run-adapter.test.ts` (210) + `workflow-message-coordinator.test.ts` (988) — test
+  surviving extension code but import `src/client/` (the coordinator test also imports
+  `state/workflow-messages`, removed in Phase 4). They must be rewired to the worker adapter in
+  Phase 2/3, not deleted.
+- `e2e/package-resources.e2e.test.ts` (228) — part of the e2e net; goes with the client in
+  Phase 3.
+
+Test-file count after this batch: 118 → 81.
+
 ## Not deletable yet — what keeps each alive, and when it falls out
 
 | Target                                           | Kept alive by                                                                                                                                                                                                                                                   | Falls out in                                                                                                    |
