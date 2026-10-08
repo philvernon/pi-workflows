@@ -125,6 +125,7 @@ type HostMessage =
       notificationRequestId: string;
       ok: boolean;
       error?: string;
+      piSessionEntryId?: string;
     }
   | { id: string; type: "checkpoint.answer"; requestId: string; input: unknown }
   | { id: string; type: "decision.answer"; requestId: string; response: unknown }
@@ -308,9 +309,9 @@ files are listed under "What to remove"):
   `throw new RunParkedError()`; resumed-with-persisted-candidate → read it back, validate +
   `request.accept(...)`, then `acceptInteraction(...)` or `rejectInteraction(...)` + re-park. Sets
   `preservesActiveTimeBudget = true` and `assistantMessageMode = "visible"`.
-- **`worker-notification-sink.ts`** — implements `WorkflowNotificationSink`; emits a
-  `notification.request` event, awaits the correlated `notification.delivered` ack, and returns the
-  receipt (see seam 6).
+- **`worker-notification-sink.ts`** — implements `WorkflowNotificationSink`; persists the
+  notification row as `pending`, emits `notification.request`, and returns the receipt immediately;
+  the later `notification.delivered` ack marks the row sent (see seam 6).
 
 **Worker startup context:** the worker is spawned by the Pi extension and inherits the Pi process
 working directory. It opens the **same** database the server used today, resolved exactly as today:
@@ -367,9 +368,9 @@ deliberate product change.
 
 - **Keep (trimmed):** `json.ts` (48), `database.ts` (389, trimmed to open/verify the worker DB),
   `mutation.ts` (438, trimmed to revision checks only — no lease/token/generation fencing).
-- **Remove:** `viewer.ts` (356), `prune.ts` (839, retention sweeps), `workflow-messages.ts` (861,
-  server-owned Pi message queue → a minimal `notifications` table for the notify node plus the
-  interaction protocol; see seam 6),
+- **Remove:** `viewer.ts` (356), `prune.ts` (839, retention sweeps). **Trim:** `workflow-messages.ts`
+  (861, server-owned Pi message queue → just the notification-row storage support; the existing
+  `workflow_messages` table and rows are kept as-is — see seam 6),
   `project-store.ts` (218).
 - **`attempt-time.ts` (124) — re-home into the worker, do NOT delete.** See "Active-time accounting."
 - `schema.ts` (805) shrinks to the semantic tables the worker store uses.
@@ -539,7 +540,7 @@ The extension sends `decision.answer`; the worker runs these same functions, set
 then resumes. The settlement logic is unchanged — only its caller moves from `src/server/server.ts`
 into the worker.
 
-### 6. Notifications (`notify` node) — request/ack, not fire-and-forget
+### 6. Notifications (`notify` node) — same rows, same receipt, no delivery wait
 
 The engine requires a `WorkflowNotificationSink` when a workflow uses `notify` (`engine.ts:1137`),
 and the sink contract is **request/receipt**: `notify(request): MaybePromise<WorkflowNotificationReceipt>`
@@ -549,37 +550,39 @@ fire-and-forget event would change durable state.
 
 Verified current durability semantics (all must be preserved):
 
-- The server creates a **durable `workflowMessages` record with status `pending` before returning
-  the receipt** (`server.ts:4581-4630`; insert at `state/workflow-messages.ts:199-200`). The
+- The server creates a **durable `workflow_messages` row with status `pending`** and returns the
   receipt `{ notificationId, targetSessionId }` (with
-  `notificationId = notification-${runId}-${attemptId}-${index}`) is assembled after that write.
+  `notificationId = notification-${runId}-${attemptId}-${index}`) right after that write —
+  **without waiting for delivery** (`server.ts:4581-4630`; insert at
+  `state/workflow-messages.ts:199-200`). The notify node only ever waited on durable enqueue.
 - Delivery to the origin Pi session happens afterward; on delivery the record transitions
   `pending → sent` with a `pi_session_entry_id` (`state/workflow-messages.ts:497-501`).
 - A `pending` record survives restarts and stays outstanding — the store's visibility queries treat
   pending messages as work Pi still owes (`state/workflow-messages.ts:20-80`). A failed or missing
   delivery therefore never loses the notification.
 
-In the worker this becomes a minimal durable record plus a tiny request/ack interaction:
+The worker does exactly this, writing the rows directly instead of over RPC:
 
 ```text
 worker → extension   event { type: "notification.request", notificationRequestId, notification }
-extension → worker   { id, type: "notification.delivered", notificationRequestId, ok, error? }
+extension → worker   { id, type: "notification.delivered", notificationRequestId, ok, error?, piSessionEntryId? }
 ```
 
-- The worker's SQLite gains a small `notifications` table (notificationId, runId, attemptId,
-  notificationIndex, kind, content, targetSessionId, status `pending | delivered`, timestamps) —
-  the minimal durable state that preserves the behavior above. It is **not** the general
-  `workflowMessages` queue: step/decision/terminal presentation moves to the interaction protocol;
-  only notifications keep a durable delivery record.
-- Sink flow: persist the record as `pending` → emit `notification.request` → await the correlated
-  ack → on `ok` mark it `delivered` and return the receipt (computed exactly as today — both values
-  are already known to the worker, so the ack confirms delivery only). On ack error or timeout the
-  record stays `pending` and the sink **still returns the receipt**: a failed Pi delivery never
-  fails the node (today's "receipt = enqueued" semantics).
-- Redelivery: when a run is resumed, the worker re-emits `notification.request` for every `pending`
-  record of that run. Delivery is at-least-once, so the extension dedupes by `notificationId`.
-- No RPC. The 861-line `src/state/workflow-messages.ts` subsystem (viewer projections, ordering,
-  turn tracking) is removed; only the pending/delivered record above carries over.
+- **Storage: keep the existing `workflow_messages` table and its notification rows as-is.** No new
+  table, no migration — pending notifications already in the canonical DB stay valid. The 861-line
+  `src/state/workflow-messages.ts` implementation is trimmed to just the storage support these rows
+  need (create pending, read a run's pending rows, mark sent); viewer projections, ordering, and
+  turn tracking go away with the viewer. Step/decision/terminal presentation moves to the
+  interaction protocol; only notifications keep durable rows.
+- **Sink flow (same order as today):** persist the row as `pending` → emit `notification.request`
+  → **return the receipt immediately** (computed exactly as today). The sink does not wait for
+  delivery — waiting would make the notify node block on the Pi session, which it never did.
+- **Later:** the extension delivers to the origin session and sends `notification.delivered`; the
+  worker's host-message handler marks the row `sent`, recording `piSessionEntryId` when the
+  extension reports one (as today). On `ok: false` or no ack the row simply stays `pending`.
+- **Redelivery:** when a run is resumed, the worker re-emits `notification.request` for every
+  `pending` notification row of that run. Delivery is at-least-once, so the extension dedupes by
+  `notificationId`.
 
 ### 7. Active-time accounting (verified — do not delete `attempt-time.ts` wholesale)
 
@@ -639,8 +642,8 @@ Create `src/worker/`:
   ```
 - **`parking-executor.ts`** — the `InteractiveExecutor` pattern (fresh → `requestInteraction` +
   park; resumed → validate + accept). Emits `agent.request` to the host on park.
-- **`worker-notification-sink.ts`** — emits `notification.request`, awaits the correlated
-  `notification.delivered` ack, returns the receipt (see seam 6).
+- **`worker-notification-sink.ts`** — persists the notification row as `pending`, emits
+  `notification.request`, returns the receipt immediately; the later ack marks it sent (seam 6).
 
 The dependency direction from "Architectural constraint" applies to the new code (`src/worker →
 src/workflows, src/state`; no Pi imports). No slophammer or other boundary tooling — the constraint
@@ -731,9 +734,10 @@ Now that the server is gone, reduce `src/workflows/store.ts` + `src/state/`:
 - Strip server-era imports from kept files: `requests.ts` and `workflow-message-content.ts`
   (`state/workflow-messages.js`), `human-decision.ts` (`state/viewer.js`).
 - Re-home active-time sampling into the worker (per "Active-time accounting").
-- Remove `src/state/`: `viewer.ts`, `prune.ts`, `workflow-messages.ts`, `project-store.ts`. Trim
-  `schema.ts`, `database.ts`, `mutation.ts` to the semantic store's needs, adding the minimal
-  `notifications` table (seam 6). Keep `attempt-time.ts` (trimmed) for the worker.
+- Remove `src/state/`: `viewer.ts`, `prune.ts`, `project-store.ts`. Trim `workflow-messages.ts` to
+  notification-row storage support and keep the existing `workflow_messages` table as-is (seam 6).
+  Trim `schema.ts`, `database.ts`, `mutation.ts` to the semantic store's needs. Keep
+  `attempt-time.ts` (trimmed) for the worker.
 
 Re-run the full behavior checklist. This is the only phase that changes the store internals; because
 Phases 1–3 already proved the integration, any regression here is isolated to the store strip.
