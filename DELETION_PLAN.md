@@ -34,6 +34,29 @@ artifacts in the working tree match its retired-`host`-term sweep, and `docs/pla
 exists (the dated-plan guard was removed above as part of this batch). The full suite also has
 ~17 failing files on the clean tree; most are Phase 3/5 casualties per `PLAN.md`.
 
+## Second batch — server-subsystem tests (pulled forward from Phase 3)
+
+Deleted on this branch by explicit decision: 15 test files (~11,000 lines) that test
+`src/server/` and server-only code (`queue.ts`). The server code itself stays until Phase 3;
+`test/e2e/` keeps exercising the full stack through the real pi runtime in the meantime.
+
+- `server.test.ts` (4,069), `server-view.test.ts` (3,156), `run-queue.test.ts` (862),
+  `server-protocol-state.test.ts` (407), `server-lock.test.ts` (386),
+  `server-resource-manager.test.ts` (298), `server-scheduler.test.ts` (275),
+  `workflow-recovery.test.ts` (275), `rpc-executor-flow.test.ts` (253),
+  `server-restart.test.ts` (238), `resource-manager-pull-request.test.ts` (195),
+  `server-resource-lifecycle.test.ts` (178), `workflow-runner-content.test.ts` (177),
+  `rpc-executor.test.ts` (150), `workflow-runner-entry.test.ts` (116)
+
+Kept despite the name: `temp-workflow-servers.test.ts` — it exports `stopTempWorkflowServers`,
+imported by `test/global-setup.ts`; deleting it would break every test. Also kept for now:
+client/viewer/herdr/channels/resource-manager tests (Phase 3) and `test/e2e/` (the integration
+net until the worker path exists; replaced in Phase 5).
+
+Companion minimal fix: `.pwtest` added to `SKIP_DIRECTORY` in `test/component-vocabulary.test.ts`
+— untracked Playwright artifacts in the working tree tripped its retired-term sweep (pre-existing
+local failure, now robust against them).
+
 ## Not deletable yet — what keeps each alive, and when it falls out
 
 | Target                                           | Kept alive by                                                                                                                                                                                                                                                   | Falls out in                                                                                                    |
