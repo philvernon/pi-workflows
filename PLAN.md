@@ -625,11 +625,18 @@ npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage 
   doomed code), or document it as known-failing with a reason. Later phases' "verify green" steps
   are only meaningful against a triaged baseline.
 - **Triage outcome (recorded once; no baseline artifacts under the lean regime):** after PR #3's
-  deletions the lean gate leaves exactly one failing file — `test/extension.test.ts` (28/35).
-  Verified pre-existing on the pre-deletion tree; it exercises the extension against the server
-  architecture that Phase 3 removes and is rewired in Phase 2. Known-failing until then. The four
+  deletions the only failing file was `test/extension.test.ts` (28/35) — verified pre-existing on
+  the pre-deletion tree; it exercises the extension against the server architecture that Phase 3
+  removes. It is now `test/extension.skip.test.ts`, excluded from the default run via
+  `vitest.config.ts` until Phase 2 rewires it to the worker adapter — the rename alone did not
+  exclude it (the `test/**/*.test.ts` include still matched), and its 28 known-failing
+  ~30s-timeout tests made every default run take ~9–10 min. The four
   `package-resources.test.ts` tests asserting the deleted `schemas/` directory and built-in skills
-  were removed with their targets.
+  were removed with their targets. Also deleted up front as slow suites over code later phases
+  remove: `layout-fixtures.test.ts` (~9.8s), `graph-verify.test.ts` (~3.1s),
+  `herdr-plugin-viewer.test.ts` (~1.6s), `herdr-viewer.test.ts` (~1.2s),
+  `resource-manager-core.test.ts` (~1.0s), `prune.test.ts` (~1.0s). The lean gate is green and runs
+  in ~18s: typecheck ~1.3s, build ~1.0s, test ~15s (71 files, 722 tests).
 
 ### Phase 1 — Build the worker (additive; existing SQLite schema and WorkflowExecutionStore semantics unchanged)
 
