@@ -414,7 +414,7 @@ deliberate product change.
 
 ---
 
-## The four seams + the interaction paths (verified against the code)
+## Persistence and interaction seams (verified against the code)
 
 The engine and the parking executor depend on **two small store interfaces**, not the concrete
 class. `SqliteWorkflowStore` implements both:
@@ -624,8 +624,14 @@ npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage 
   files, so "verify green" has no working gate today. For each: fix it, delete it (if it tests
   doomed code), or document it as known-failing with a reason. Later phases' "verify green" steps
   are only meaningful against a triaged baseline.
+- **Triage outcome (recorded once; no baseline artifacts under the lean regime):** after PR #3's
+  deletions the lean gate leaves exactly one failing file — `test/extension.test.ts` (28/35).
+  Verified pre-existing on the pre-deletion tree; it exercises the extension against the server
+  architecture that Phase 3 removes and is rewired in Phase 2. Known-failing until then. The four
+  `package-resources.test.ts` tests asserting the deleted `schemas/` directory and built-in skills
+  were removed with their targets.
 
-### Phase 1 — Build the worker (additive; existing store unchanged)
+### Phase 1 — Build the worker (additive; existing SQLite schema and WorkflowExecutionStore semantics unchanged)
 
 Create `src/worker/`:
 
@@ -840,7 +846,7 @@ them by default; flag any you want kept and we add it back as an opt-in.
 - **Built-in workflows** (`autoimplement`, `autoplan`, `autodoc`, `sanity-check`, `monitor`,
   `plan-approval`, `plain-summary`, and the non-discoverable helpers): removed with `src/builtins/`.
   A product change — the named workflows disappear. User `*.workflow.ts` files still load (the
-  loader's catalog param is optional).
+  loader's catalog param is removed).
 
 ## Estimated reduction
 
