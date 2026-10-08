@@ -86,7 +86,7 @@ The engine's three real seams are preserved and are what make this work:
 ### The key insight: the worker's executor _parks_; the extension _presents_
 
 An agent step does NOT reach Pi from the worker. The current `InteractiveExecutor`
-(`src/server/workflow-runner-entry.ts:207`) proves the pattern: on a fresh agent step it records the
+(`src/server/workflow-runner-entry.ts:196`) proves the pattern: on a fresh agent step it records the
 pending interaction, then `throw new RunParkedError()`. The engine parks the run. The **extension**
 — which owns the Pi session — presents the step to the model (a custom message of type
 `WORKFLOW_AGENT_STEP_MESSAGE_TYPE` + a model turn) and later sends `agent.submit` back over the
@@ -495,7 +495,7 @@ candidate (`workflow-runner-entry.ts:50,365`). Consequences for the worker:
 ### 3. `AgentStepExecutor` (`src/workflows/types.ts:900-910`) — a _parking_ executor in the worker
 
 The engine delegates agent steps via `runAgentStep(...)` (`engine.ts:1350`). The worker's
-`parking-executor.ts` (the `InteractiveExecutor` pattern, `workflow-runner-entry.ts:207`) depends on
+`parking-executor.ts` (the `InteractiveExecutor` pattern, `workflow-runner-entry.ts:196`) depends on
 `InteractionStore`, not the concrete store:
 
 - Fresh step → `interactionStore.requestInteraction({ attemptId, kind, contract })` then
@@ -682,8 +682,9 @@ Create `src/worker/`:
     onEvent: (_event, state) => emit("run.changed", { runId: state.runId, state }),
   });
   ```
-- **`parking-executor.ts`** — the `InteractiveExecutor` pattern (fresh → `requestInteraction` +
-  park; resumed → validate + accept). Emits `agent.request` to the host on park.
+- **`parking-executor.ts`** — implements `AgentStepExecutor`, following the `InteractiveExecutor`
+  pattern (fresh → `requestInteraction` + park; resumed → validate + accept). Emits
+  `agent.request` to the host on park.
 - **`worker-notification-sink.ts`** — persists the notification row as `pending`, emits
   `notification.request`, returns the receipt immediately; the later ack marks it sent (seam 6).
 
