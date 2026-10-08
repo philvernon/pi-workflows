@@ -71,8 +71,9 @@ Workflow worker (isolated process)
      └── effect / checkpoint / settings state
 ```
 
-One Pi session spawns one workflow worker; the worker runs in the same working directory context and
-owns the workflow SQLite DB for that context.
+The worker is spawned by the Pi extension and accesses the existing workflow SQLite database
+directly. Database scoping and durable workflow persistence semantics remain unchanged from the
+existing implementation; only the server/RPC layer between the engine and store is removed.
 
 The engine's three real seams are preserved and are what make this work:
 
@@ -118,7 +119,13 @@ type HostMessage =
   | { id: string; type: "run.restart"; runId: string; expectedRevision: number }
   | { id: string; type: "agent.submit"; requestId: string; output: unknown }
   | { id: string; type: "agent.update"; requestId: string; update: WorkflowUpdateInput }
-  | { id: string; type: "notification.delivered"; notificationRequestId: string; ok: boolean; error?: string }
+  | {
+      id: string;
+      type: "notification.delivered";
+      notificationRequestId: string;
+      ok: boolean;
+      error?: string;
+    }
   | { id: string; type: "checkpoint.answer"; requestId: string; input: unknown }
   | { id: string; type: "decision.answer"; requestId: string; response: unknown }
   | { id: string; type: "settings.patch"; runId: string; patch: JsonPatch };
@@ -306,9 +313,12 @@ files are listed under "What to remove"):
   receipt (see seam 6).
 
 **Worker startup context:** the worker is spawned by the Pi extension and inherits the Pi process
-working directory. It either receives the SQLite DB path directly at startup or derives it from that
-working directory. No worker IDs, project IDs, registries, routing tables, leases, ownership records,
-or project-scoping protocol are introduced.
+working directory. It opens the **same** database the server used today, resolved exactly as today:
+`options.filePath ?? workflowStatePath(homeDir)` — i.e. `~/.pi/agent/workflows/<db>` unless an
+explicit path is passed (`state/database.ts:61-70`). That is one shared state DB for all sessions,
+not a per-session or per-project file; the worker merely opens it directly instead of over RPC. No
+worker IDs, project IDs, registries, routing tables, leases, ownership records, or project-scoping
+protocol are introduced.
 
 ---
 
@@ -358,7 +368,8 @@ deliberate product change.
 - **Keep (trimmed):** `json.ts` (48), `database.ts` (389, trimmed to open/verify the worker DB),
   `mutation.ts` (438, trimmed to revision checks only — no lease/token/generation fencing).
 - **Remove:** `viewer.ts` (356), `prune.ts` (839, retention sweeps), `workflow-messages.ts` (861,
-  server-owned Pi message queue → the worker's `notification`/interaction messages),
+  server-owned Pi message queue → a minimal `notifications` table for the notify node plus the
+  interaction protocol; see seam 6),
   `project-store.ts` (218).
 - **`attempt-time.ts` (124) — re-home into the worker, do NOT delete.** See "Active-time accounting."
 - `schema.ts` (805) shrinks to the semantic tables the worker store uses.
@@ -466,7 +477,7 @@ touches the concrete store or any server RPC.
 
 The record moves through **`pending → validating → accepted | rejected`**, mirroring the current
 server flow, where `beginInteractionValidation` persists the candidate with status "validating"
-*before* the run resumes (`server.ts:2669+`) and the resumed runner re-bootstraps with that
+_before_ the run resumes (`server.ts:2669+`) and the resumed runner re-bootstraps with that
 candidate (`workflow-runner-entry.ts:50,365`). Consequences for the worker:
 
 - The `agent.submit` handler calls `submitInteraction(...)` **before** `engine.resumeRun(...)`, so
@@ -530,27 +541,41 @@ The engine requires a `WorkflowNotificationSink` when a workflow uses `notify` (
 and the sink contract is **request/receipt**: `notify(request): MaybePromise<WorkflowNotificationReceipt>`
 (`types.ts:929-930`). The notify node's output **is the receipt** — `const receipt = await
 this.notificationSink.notify(...); return { output: receipt }` (`engine.ts:1148-1156`) — so a
-fire-and-forget event would change durable state. Today the server assembles the receipt
-(`{ notificationId, targetSessionId }`, with
-`notificationId = notification-${runId}-${attemptId}-${index}`, `server.ts:4581-4630`) after
-enqueuing a `workflowMessages` record for the origin session.
+fire-and-forget event would change durable state.
 
-In the worker this becomes a tiny request/ack interaction:
+Verified current durability semantics (all must be preserved):
+
+- The server creates a **durable `workflowMessages` record with status `pending` before returning
+  the receipt** (`server.ts:4581-4630`; insert at `state/workflow-messages.ts:199-200`). The
+  receipt `{ notificationId, targetSessionId }` (with
+  `notificationId = notification-${runId}-${attemptId}-${index}`) is assembled after that write.
+- Delivery to the origin Pi session happens afterward; on delivery the record transitions
+  `pending → sent` with a `pi_session_entry_id` (`state/workflow-messages.ts:497-501`).
+- A `pending` record survives restarts and stays outstanding — the store's visibility queries treat
+  pending messages as work Pi still owes (`state/workflow-messages.ts:20-80`). A failed or missing
+  delivery therefore never loses the notification.
+
+In the worker this becomes a minimal durable record plus a tiny request/ack interaction:
 
 ```text
 worker → extension   event { type: "notification.request", notificationRequestId, notification }
 extension → worker   { id, type: "notification.delivered", notificationRequestId, ok, error? }
 ```
 
-- The worker's `worker-notification-sink.ts` emits the `notification.request` event and **awaits**
-  the correlated ack. On `ok` it returns the receipt `{ notificationId, targetSessionId }`, computed
-  exactly as today — both values are already known to the worker (the deterministic id formula and
-  the run's origin session), so the ack confirms delivery only; it does not carry the receipt.
-- On ack error or timeout the sink returns the receipt anyway: today's semantics are "receipt =
-  enqueued for the origin session", and a failed Pi delivery never fails the node. Delivery is
-  at-least-once across worker restarts (a re-run notify node recomputes the same
-  `notificationIndex`/`notificationId`), so the extension dedupes by `notificationId`.
-- No RPC, no `workflowMessages` table.
+- The worker's SQLite gains a small `notifications` table (notificationId, runId, attemptId,
+  notificationIndex, kind, content, targetSessionId, status `pending | delivered`, timestamps) —
+  the minimal durable state that preserves the behavior above. It is **not** the general
+  `workflowMessages` queue: step/decision/terminal presentation moves to the interaction protocol;
+  only notifications keep a durable delivery record.
+- Sink flow: persist the record as `pending` → emit `notification.request` → await the correlated
+  ack → on `ok` mark it `delivered` and return the receipt (computed exactly as today — both values
+  are already known to the worker, so the ack confirms delivery only). On ack error or timeout the
+  record stays `pending` and the sink **still returns the receipt**: a failed Pi delivery never
+  fails the node (today's "receipt = enqueued" semantics).
+- Redelivery: when a run is resumed, the worker re-emits `notification.request` for every `pending`
+  record of that run. Delivery is at-least-once, so the extension dedupes by `notificationId`.
+- No RPC. The 861-line `src/state/workflow-messages.ts` subsystem (viewer projections, ordering,
+  turn tracking) is removed; only the pending/delivered record above carries over.
 
 ### 7. Active-time accounting (verified — do not delete `attempt-time.ts` wholesale)
 
@@ -703,8 +728,8 @@ Now that the server is gone, reduce `src/workflows/store.ts` + `src/state/`:
   (`state/workflow-messages.js`), `human-decision.ts` (`state/viewer.js`).
 - Re-home active-time sampling into the worker (per "Active-time accounting").
 - Remove `src/state/`: `viewer.ts`, `prune.ts`, `workflow-messages.ts`, `project-store.ts`. Trim
-  `schema.ts`, `database.ts`, `mutation.ts` to the semantic store's needs. Keep `attempt-time.ts`
-  (trimmed) for the worker.
+  `schema.ts`, `database.ts`, `mutation.ts` to the semantic store's needs, adding the minimal
+  `notifications` table (seam 6). Keep `attempt-time.ts` (trimmed) for the worker.
 
 Re-run the full behavior checklist. This is the only phase that changes the store internals; because
 Phases 1–3 already proved the integration, any regression here is isolated to the store strip.
