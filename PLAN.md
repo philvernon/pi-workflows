@@ -528,10 +528,14 @@ introduced last.
 
 ### Phase 0 — Baseline (no code change)
 
-- Record a green baseline with the lean gate only: `npm run typecheck && npm run build &&
-npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage threshold, the
+- Record a baseline with the lean gate only: `npm run typecheck && npm run build &&
+  npm run test`. The old pre-finish regime (`npm run check` with its 85% coverage threshold, the
   e2e baseline ritual, API-surface snapshot diffing) is base-repo authority and does not carry
   over.
+- **Triage the pre-existing failures first.** The clean tree already carries ~17 failing test
+  files, so "verify green" has no working gate today. For each: fix it, delete it (if it tests
+  doomed code), or document it as known-failing with a reason. Later phases' "verify green" steps
+  are only meaningful against a triaged baseline.
 
 ### Phase 1 — Build the worker (additive; existing store unchanged)
 
@@ -579,6 +583,11 @@ In `src/extension/index.ts`:
   here (bounded, no coordinator epoch).
 - **Post-workflow model turn:** on `run.finished`, the extension gives the model its turn (direct,
   not server-scheduled).
+- **Rewire the entangled extension tests to the worker adapter in this phase** (not Phase 5):
+  `extension.test.ts` (2,046), `workflow-message-coordinator.test.ts` (988), and
+  `session-run-adapter.test.ts` (210) test surviving extension code but import `src/client/` (the
+  coordinator test also imports `state/workflow-messages`, removed in Phase 4). They cannot survive
+  Phase 3 as-is.
 
 **Verify all workflow behavior here while persistence is unchanged.** This proves the integration is
 behavior-preserving before we strip the store.
@@ -596,6 +605,25 @@ Delete, in dependency order (leaves first):
 6. `src/server/`.
 7. `src/builtins/` + the extension's `BUILTIN_WORKFLOW_METADATA` import (`index.ts:4`) and its use
    (line 1356).
+
+The server/client/builtins **test files were already deleted on the `deletions/barebones` branch**
+(pulled forward from this phase), so Phase 3 is now mostly pure source deletion. What remains of
+the test work:
+
+- Delete the doomed-subsystem test files orphaned by steps 1–3: herdr, viewer, resource-manager,
+  and channel tests.
+- **Migrate `test/e2e/workflow.e2e.test.ts` (1,488) to the worker path in this phase.** It imports
+  `src/client/` directly (`WorkflowClient`, `clientSocketPath`); after Phase 2 it already exercises
+  the worker through the extension, so only its direct client usage needs replacing. Delete
+  `test/e2e/package-resources.e2e.test.ts` with the client. Without this step Phase 3 lands with a
+  broken e2e and no integration coverage until Phase 5.
+- **Re-home the temp-server test utility's server dependency.** `test/temp-workflow-servers.ts`
+  (imported by `global-setup.ts`, so the whole suite depends on it) imports
+  `src/server/processes.js` for process-identity matching; move that small pure helper into the
+  test tree so the utility no longer depends on `src/server`. Delete
+  `test/temp-workflow-servers.test.ts` with the server.
+- Update `loader.test.ts` to stop using the builtins catalog as fixtures (it tests the surviving
+  loader; the catalog param itself goes in Phase 4).
 
 Update `package.json` (drop `bin`, the `./client`, `./resource-managers`, and `./builtins`
 exports, the `@earendil-works/pi-tui` devDependency, herdr files, and the removed artifact dirs
@@ -626,10 +654,11 @@ Phases 1–3 already proved the integration, any regression here is isolated to 
 
 ### Phase 5 — Tests + docs
 
-- **Test reduction target: 118 test files → ~25–35.** Remove every server/client/herdr/viewer/
-  resource-manager/channel/builtins test file, then reduce the engine tests to one file per
-  behavior-checklist item plus the worker integration and durable-resume suites below. The 85%
-  coverage threshold is gone; do not re-add tests to satisfy a coverage gate.
+- **Test reduction target: 81 test files → ~25–35** (rebased — the server, builtins, and client
+  test files were already deleted on the `deletions/barebones` branch; herdr/viewer/
+  resource-manager/channel tests go with their source in Phase 3). Then reduce the engine tests to
+  one file per behavior-checklist item plus the worker integration and durable-resume suites below.
+  The 85% coverage threshold is gone; do not re-add tests to satisfy a coverage gate.
 - Engine unit tests instantiate `WorkflowEngine` directly with a store — they already work against
   the interface; add a `MemoryWorkflowStore` for fast in-process tests (no worker, no SQLite).
 - Add worker integration tests: start/status/pause/resume/cancel/restart over the protocol,
@@ -739,7 +768,8 @@ them by default; flag any you want kept and we add it back as an opt-in.
 | `src/workflows/` server-era files (queue, catalog, prompt-evidence, command-batch, session-reducer) | ~3,211       | remove                      |
 | **Total removed/replaced**                                                                          | **~38,000+** | of ~51,000 src lines        |
 
-Beyond `src/`: 118 test files reduced to ~25–35; `skills/` (5 of 6 deleted), built-in-specific
+Beyond `src/`: 118 test files reduced to ~25–35 (server/builtins/client batches already done on
+the `deletions/barebones` branch: 118 → 81); `skills/` (5 of 6 deleted), built-in-specific
 `examples/`, both `fixtures/` dirs, `schemas/`, `protocol/`, most of `scripts/`, `slophammer.yml`,
 the baseline logs, and `docs/MONITOR.md` removed; `README.md` rewritten.
 
