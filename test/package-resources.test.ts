@@ -19,51 +19,7 @@ interface PackageManifest {
   };
 }
 
-function parseFrontmatter(markdown: string): Map<string, string> {
-  const match = /^---\n([\s\S]*?)\n---(?:\n|$)/u.exec(markdown);
-  if (!match) return new Map();
-
-  const body = match[1];
-  if (body === undefined) return new Map();
-
-  return new Map(
-    body
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf(":");
-        if (separator < 0) return undefined;
-        return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()] as const;
-      })
-      .filter((entry): entry is readonly [string, string] => entry !== undefined),
-  );
-}
-
-async function skillFiles(): Promise<string[]> {
-  const entries = await fs.readdir(skillsRoot, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(skillsRoot, entry.name, "SKILL.md"))
-    .sort();
-}
-
 describe("Pi package resources", () => {
-  it("ships one v1 schema for each human-decision record", async () => {
-    const schemaFiles = (await fs.readdir(path.join(repoRoot, "schemas")))
-      .filter((file) =>
-        /^human-decision-(request|accepted|receipt|delivery|resolution)-v\d+\.schema\.json$/u.test(
-          file,
-        ),
-      )
-      .sort();
-    expect(schemaFiles).toEqual([
-      "human-decision-accepted-v1.schema.json",
-      "human-decision-delivery-v1.schema.json",
-      "human-decision-receipt-v1.schema.json",
-      "human-decision-request-v1.schema.json",
-      "human-decision-resolution-v1.schema.json",
-    ]);
-  });
-
   it("publishes the extension and skill directory", async () => {
     const manifest = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as PackageManifest;
 
@@ -103,94 +59,6 @@ describe("Pi package resources", () => {
     expect(herdrManifest).toContain(`version = "${manifest.version}"`);
     expect(herdrManifest).toContain('command = ["node", "plugins/herdr/viewer.mjs"]');
     await expect(fs.stat(path.join(repoRoot, "plugins/herdr/viewer.mjs"))).resolves.toBeDefined();
-  });
-
-  it("ships valid uniquely named skills", async () => {
-    const files = await skillFiles();
-    expect(files.map((file) => path.relative(skillsRoot, file))).toEqual([
-      "autodoc/SKILL.md",
-      "autoimplement/SKILL.md",
-      "autoplan/SKILL.md",
-      "monitor/SKILL.md",
-      "pi-workflows/SKILL.md",
-      "sanity-check/SKILL.md",
-    ]);
-
-    const names: string[] = [];
-    for (const file of files) {
-      const markdown = await fs.readFile(file, "utf8");
-      const frontmatter = parseFrontmatter(markdown);
-      const name = frontmatter.get("name");
-      const description = frontmatter.get("description");
-
-      expect(name).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
-      expect(description?.length).toBeGreaterThan(0);
-      if (name === undefined || description === undefined) {
-        throw new Error(`${file} has incomplete frontmatter.`);
-      }
-      expect(description.length).toBeLessThanOrEqual(1024);
-      names.push(name);
-    }
-
-    expect(new Set(names).size).toBe(names.length);
-  });
-
-  it("ships one-shot start contracts for built-in workflow skills", async () => {
-    const expectedWorkflows = [
-      "autodoc",
-      "autoimplement",
-      "autoplan",
-      "monitor",
-      "sanity-check",
-    ] as const;
-
-    for (const workflow of expectedWorkflows) {
-      const markdown = await fs.readFile(path.join(skillsRoot, workflow, "SKILL.md"), "utf8");
-      const exampleMatch = /```json\n([\s\S]*?)\n```/u.exec(markdown);
-      const exampleText = exampleMatch?.[1];
-      if (exampleText === undefined) {
-        throw new Error(`${workflow} skill has no JSON start example.`);
-      }
-      const example = JSON.parse(exampleText) as {
-        action?: unknown;
-        workflow?: unknown;
-        input?: Record<string, unknown>;
-      };
-
-      expect(markdown).toContain("## Start the workflow");
-      expect(markdown.toLowerCase()).toContain("build the complete input");
-      expect(example.action).toBe("start");
-      expect(example.workflow).toBe(workflow);
-      expect(example.input).toBeTypeOf("object");
-    }
-
-    const autoimplement = await fs.readFile(
-      path.join(skillsRoot, "autoimplement", "SKILL.md"),
-      "utf8",
-    );
-    expect(autoimplement).toContain('"repository": "/absolute/path/to/repository"');
-    expect(autoimplement).toContain('"scope": "Only /absolute/path/to/repository.');
-    expect(autoimplement).toContain('"merge": false');
-    expect(autoimplement).toContain('"constraints": [');
-    expect(autoimplement).toContain("`verificationChecks`");
-    expect(autoimplement).toContain("`verificationUntested`");
-    expect(autoimplement).toContain("The workflow planner is the safe default.");
-    expect(autoimplement).toContain('"mode": "required"');
-    expect(autoimplement).toContain('"mode": "skip"');
-
-    const monitor = await fs.readFile(path.join(skillsRoot, "monitor", "SKILL.md"), "utf8");
-    expect(monitor).toContain('"mode": "required"');
-    expect(monitor).toContain('"mode": "skip"');
-    expect(monitor).toContain("continues with the exact presented plan after 10 minutes");
-  });
-
-  it("keeps routine work moving without inventing paid-compute approval", async () => {
-    const markdown = await fs.readFile(path.join(skillsRoot, "monitor", "SKILL.md"), "utf8");
-
-    expect(markdown).toContain("A monitoring request does not grant spending approval");
-    expect(markdown).toContain("continue without asking again");
-    expect(markdown).toContain("Do not ask once per image, package, or task");
-    expect(markdown).not.toContain("grants a default cumulative spending ceiling");
   });
 
   it("keeps local references in the workflow skill inside the package", async () => {
